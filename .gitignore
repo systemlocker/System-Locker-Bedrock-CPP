@@ -36,3 +36,6 @@ live-test.env
 
 # The public tree is a separate nested repository.
 publish/
+
+# The public release repository intentionally contains the signed-off static SDK.
+!static/lib/*.lib

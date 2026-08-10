@@ -1,5 +1,7 @@
 #pragma once
 
+#include "export.hpp"
+
 #include <chrono>
 #include <map>
 #include <memory>
@@ -12,7 +14,7 @@ namespace syslocker::bedrock
 {
     using FormFields = std::vector<std::pair<std::string, std::string>>;
 
-    struct HttpResponse
+    struct SYSLOCKER_BEDROCK_API HttpResponse
     {
         long status = 0;
         std::string body;
@@ -27,7 +29,7 @@ namespace syslocker::bedrock
         std::string header(std::string_view name) const;
     };
 
-    class IHttpClient
+    class SYSLOCKER_BEDROCK_API IHttpClient
     {
     public:
         virtual ~IHttpClient() = default;
@@ -41,5 +43,5 @@ namespace syslocker::bedrock
         std::string pinnedPublicKey;
     };
 
-    std::unique_ptr<IHttpClient> makeCurlHttpClient(CurlHttpOptions options = {});
+    SYSLOCKER_BEDROCK_API std::unique_ptr<IHttpClient> makeCurlHttpClient(CurlHttpOptions options = {});
 }

@@ -10,6 +10,19 @@ verified with the public key already pinned in the application. The library
 then checks the response's challenge, system ID, protocol version, server time,
 and identity hash before it can create or advance a session.
 
+The repository is a source-only distribution. There are two ways to integrate
+the library into your own project:
+
+1. **Integrate the source directly** — recommended. Copy `include/` and `src/`
+   into your project and compile them as part of your own build.
+2. **Link the prebuilt static package** in `static/` — the fastest setup when
+   you prefer a ready-made static library for Windows x64.
+
+The library is provided for your convenience above all else. Compiling the
+implementation directly into your own binary keeps your existing build flags
+and lets you step through the source in your own build; the prebuilt package is
+there when you want a quick, known-good link.
+
 ## Security properties
 
 - Ed25519 verification happens over the exact response bytes before JSON is parsed.
@@ -27,39 +40,90 @@ hardening, and server-side policy should be used as complementary controls.
 
 ## Requirements
 
-- CMake 3.20+
-- A C++20 compiler
+Integrating the source directly requires:
+
+- A C++20 compiler (Visual Studio 2019 16.8+ / 2022, GCC 11+, Clang 14+, or AppleClang 14+)
 - libcurl
 - OpenSSL 1.1.1 or newer (`Crypto` component)
 
 OpenSSL is used for Ed25519, secure randomness, and SHA-256. nlohmann/json 3.11.3
 is vendored as a private implementation dependency under `third_party/`.
 
-The project-specific distribution terms should be published with the first
-official release. The vendored dependency's MIT notice is included in
-`THIRD_PARTY_NOTICES.md`.
+The prebuilt static SDK additionally requires Windows x64 and a compatible
+Microsoft Visual C++ toolset. It already contains Bedrock's compiled
+third-party dependencies. See [STATIC-LIBRARY.md](STATIC-LIBRARY.md).
 
-## Build
+Dependency notices are included in `THIRD_PARTY_NOTICES.md`, with complete
+license texts alongside the prebuilt SDK.
 
-With vcpkg on Windows:
+## Prebuilt static SDK
 
-```powershell
-cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
-  -DVCPKG_TARGET_TRIPLET=x64-windows
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
+The repository's `static/` directory and the matching release archive provide
+a ready-to-link, fully static Bedrock SDK for Windows x64. It already contains
+Bedrock, libcurl, OpenSSL Crypto, and zlib compiled with the static `/MT`
+runtime, so no Bedrock or dependency DLL is required.
+
+The package is just headers, libraries, and license texts — it ships no build
+system files. Link it through your existing build system (for example the
+Visual Studio steps in [STATIC-LIBRARY.md](STATIC-LIBRARY.md)) the same way
+you would link any other static library.
+
+## Integrate the source directly (recommended)
+
+Use this when you want to compile System Locker Bedrock into your own project
+instead of linking a prebuilt library.
+
+### Files to copy into your project
+
+At minimum, bring these into your project or vendor directory:
+
+```text
+include/syslocker/
+src/
+third_party/nlohmann/json.hpp
 ```
 
-With system packages on Linux or macOS:
+### Files that must be compiled
 
-```bash
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build --output-on-failure
+Add every `.cpp` under `src/` to your project and keep the private headers from
+`src/` beside them:
+
+```text
+bedrock.cpp
+crypto.cpp
+curl_http.cpp
+response.cpp
 ```
 
-The exported CMake target is `SystemLocker::Bedrock`.
+### Visual Studio setup
+
+1. Set your project to C++20.
+2. Add `src/*.cpp` to your project and keep `src/crypto.hpp` beside them.
+3. Add `include/` to C/C++ -> General -> Additional Include Directories.
+4. Add `third_party/nlohmann/` to C/C++ -> General -> Additional Include Directories.
+5. Add your libcurl, OpenSSL Crypto, and zlib libraries, plus the Windows SDK
+   libraries, to Linker -> Input -> Additional Dependencies:
+
+```text
+libcurl.lib;libcrypto.lib;zs.lib;bcrypt.lib;advapi32.lib;crypt32.lib;secur32.lib;ws2_32.lib;iphlpapi.lib;user32.lib
+```
+
+The exact curl and OpenSSL library names depend on how you provide them (vcpkg,
+system packages, or a bundled build).
+
+### Minimal include
+
+```cpp
+#include <syslocker/bedrock.hpp>
+```
+
+### Other build systems
+
+The library has no build system files of its own. Integrate it the same way in
+any build system: compile `src/*.cpp`, add `include/` and
+`third_party/nlohmann/` to the include path, and link libcurl, OpenSSL Crypto,
+and zlib. Because `SYSLOCKER_BEDROCK_SHARED` is never defined, the headers use
+plain static linkage.
 
 ## Quick start
 
@@ -124,36 +188,19 @@ with the current public key.
 Never download a signing key dynamically from the same unauthenticated server
 response you are trying to verify.
 
-## Manual and live testing
+## Manual heartbeat scheduling
 
 Set `Config::automaticHeartbeats = false` to call `Client::heartbeatNow()` from
 your own scheduler. Calling it too early will correctly trigger the server's
 terminal timing response.
-
-An opt-in live probe is available without storing credentials in the repo:
-
-```powershell
-cmake -S . -B build-live `
-  -DSYSLOCKER_BEDROCK_BUILD_LIVE_TEST=ON `
-  -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build build-live --config Release --target systemlocker_bedrock_live_test
-
-$env:SYSLOCKER_BEDROCK_SYSTEM_ID = "..."
-$env:SYSLOCKER_BEDROCK_PUBLIC_KEY = "..."
-$env:SYSLOCKER_BEDROCK_LICENSE_KEY = "..."
-.\build-live\Release\systemlocker_bedrock_live_test.exe
-```
-
-The live probe is not registered with CTest and never prints the license key.
 
 ## Repository layout
 
 ```text
 include/       stable public API
 src/           implementation
-tests/         offline protocol and tamper tests; optional live probe
-examples/      environment-variable based CLI
-docs/          protocol and implementation source notes
+tests/         offline protocol and tamper tests (reference)
+examples/      environment-variable based CLI (reference)
 third_party/   vendored JSON parser and notice
-publish/       separate sanitized public Git repository
+static/        prebuilt Windows x64 static SDK and release archive
 ```

@@ -30,7 +30,7 @@ namespace syslocker::bedrock
 
     class BedrockSession;
 
-    class Client
+    class SYSLOCKER_BEDROCK_API Client
     {
     public:
         explicit Client(Config config);

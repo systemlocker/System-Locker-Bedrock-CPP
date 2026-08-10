@@ -23,3 +23,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Prebuilt static SDK dependencies
+
+The Windows static SDK also contains compiled copies of:
+
+- curl/libcurl, distributed under the curl license.
+- OpenSSL, distributed under the Apache License 2.0.
+- zlib, distributed under the zlib license.
+
+The complete license text supplied by each dependency is included in the
+SDK's `licenses/` directory. These libraries are build dependencies of the
+precompiled package; their source code is not vendored in this repository.

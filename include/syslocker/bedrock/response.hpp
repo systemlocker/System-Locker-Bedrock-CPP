@@ -1,5 +1,7 @@
 #pragma once
 
+#include "export.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -40,8 +42,8 @@ namespace syslocker::bedrock
         Unknown,
     };
 
-    ResponseCode responseCodeFromString(std::string_view value) noexcept;
-    std::string_view toString(ResponseCode code) noexcept;
+    SYSLOCKER_BEDROCK_API ResponseCode responseCodeFromString(std::string_view value) noexcept;
+    SYSLOCKER_BEDROCK_API std::string_view toString(ResponseCode code) noexcept;
 
     struct Response
     {

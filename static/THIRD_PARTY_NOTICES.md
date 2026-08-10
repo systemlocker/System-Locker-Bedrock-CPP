@@ -1,0 +1,37 @@
+# Third-party notices
+
+## JSON for Modern C++
+
+This project includes nlohmann/json 3.11.3 under `third_party/nlohmann/json.hpp`.
+
+Copyright (c) 2013-2023 Niels Lohmann and contributors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Prebuilt static SDK dependencies
+
+The Windows static SDK also contains compiled copies of:
+
+- curl/libcurl, distributed under the curl license.
+- OpenSSL, distributed under the Apache License 2.0.
+- zlib, distributed under the zlib license.
+
+The complete license text supplied by each dependency is included in the
+SDK's `licenses/` directory. These libraries are build dependencies of the
+precompiled package; their source code is not vendored in this repository.
