@@ -1,0 +1,38 @@
+# Build output
+build/
+build-*/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# Compiled artifacts
+*.a
+*.dll
+*.dylib
+*.exe
+*.ilk
+*.lib
+*.o
+*.obj
+*.pdb
+*.so
+
+# IDE and local configuration
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Secrets and live-test inputs
+.env
+.env.*
+!.env.example
+live-test.env
+
+# The public tree is a separate nested repository.
+publish/
