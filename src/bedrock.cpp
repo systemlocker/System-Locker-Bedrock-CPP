@@ -1,4 +1,5 @@
 #include "syslocker/bedrock/client.hpp"
+#include "syslocker/bedrock/invisible_folder.hpp"
 
 #include "crypto.hpp"
 
@@ -99,7 +100,7 @@ namespace syslocker::bedrock
             hook_ = std::move(hook);
         }
 
-        Result<Response> heartbeat()
+        Result<Response> heartbeat(HeartbeatOptions options)
         {
             std::lock_guard requestLock(requestMutex_);
             if (!alive())
@@ -120,6 +121,8 @@ namespace syslocker::bedrock
                 {"system", config_.systemId},
                 {"challenge", *challenge},
             };
+            if (options.requestInvisibleFolderToken)
+                fields.emplace_back("init-if", "true");
 
             HttpResponse httpResponse = http_.post(endpoint(config_.baseUrl, kBeatPath), fields);
             // A transport failure may mean the server committed the rotation
@@ -221,7 +224,7 @@ namespace syslocker::bedrock
                     previousSteady = currentSteady;
                     previousSystem = currentSystem;
 
-                    const auto response = heartbeat();
+                    const auto response = heartbeat({});
                     if (!response || !alive())
                         return;
                 }
@@ -266,8 +269,11 @@ namespace syslocker::bedrock
             options.userAgent = config_.userAgent;
             if (config_.pinnedTlsPublicKeySha256Base64)
                 options.pinnedPublicKey = "sha256//" + *config_.pinnedTlsPublicKeySha256Base64;
+            if (config_.invisibleFolderPinnedTlsPublicKeySha256Base64)
+                options.invisibleFolderPinnedPublicKey = "sha256//" + *config_.invisibleFolderPinnedTlsPublicKeySha256Base64;
             http_ = makeCurlHttpClient(std::move(options));
         }
+        invisibleFolder_ = std::make_unique<InvisibleFolder>(*http_, config_);
     }
 
     Client::~Client()
@@ -298,18 +304,21 @@ namespace syslocker::bedrock
         return static_cast<void *>(nullptr);
     }
 
-    Result<AuthenticationResult> Client::authenticateWithKey(std::string licenseKey)
+    Result<AuthenticationResult> Client::authenticateWithKey(std::string licenseKey,
+                                                               InitializationOptions options)
     {
         FormFields fields{{"key", licenseKey}};
-        auto result = authenticate(std::move(fields), licenseKey, true);
+        auto result = authenticate(std::move(fields), licenseKey, true, options);
         wipe(licenseKey);
         return result;
     }
 
-    Result<AuthenticationResult> Client::authenticateWithPassword(std::string username, std::string password)
+    Result<AuthenticationResult> Client::authenticateWithPassword(std::string username,
+                                                                    std::string password,
+                                                                    InitializationOptions options)
     {
         FormFields fields{{"username", username}, {"password", password}};
-        auto result = authenticate(std::move(fields), username, false);
+        auto result = authenticate(std::move(fields), username, false, options);
         wipe(username);
         wipe(password);
         return result;
@@ -317,7 +326,8 @@ namespace syslocker::bedrock
 
     Result<AuthenticationResult> Client::authenticate(FormFields fields,
                                                        std::string_view identity,
-                                                       bool keyAuthentication)
+                                                       bool keyAuthentication,
+                                                       const InitializationOptions &options)
     {
         const auto validation = validateConfig();
         if (!validation)
@@ -341,6 +351,10 @@ namespace syslocker::bedrock
         fields.emplace_back("challenge", *challenge);
         if (config_.programDigest)
             fields.emplace_back("digest", *config_.programDigest);
+        if (options.requestInvisibleFolderToken)
+            fields.emplace_back("init-if", "true");
+        for (const auto &variable : options.variables)
+            fields.emplace_back("variables[]", variable);
 
         const HttpResponse httpResponse = http_->post(endpoint(config_.baseUrl, kInitPath), fields);
         wipe(fields);
@@ -361,6 +375,9 @@ namespace syslocker::bedrock
             return Result<AuthenticationResult>::fail(ErrorKind::InvalidPayload, "Bedrock authentication flags contradict the response code.");
 
         AuthenticationResult result{*response, false};
+        if (!response->authed && (!response->variables.empty() || response->invisibleFolderToken))
+            return Result<AuthenticationResult>::fail(ErrorKind::InvalidPayload,
+                                                       "A rejected Bedrock initialization returned successful-only data.");
         if (!response->authed)
             return result;
         if (!response->sessionToken)
@@ -382,11 +399,13 @@ namespace syslocker::bedrock
             std::lock_guard lock(mutex_);
             session_ = std::move(session);
         }
+        if (response->invisibleFolderToken)
+            invisibleFolder_->setToken(*response->invisibleFolderToken);
         result.sessionStarted = true;
         return result;
     }
 
-    Result<Response> Client::heartbeatNow()
+    Result<Response> Client::heartbeatNow(HeartbeatOptions options)
     {
         std::shared_ptr<BedrockSession> session;
         {
@@ -395,7 +414,20 @@ namespace syslocker::bedrock
         }
         if (!session)
             return Result<Response>::fail(ErrorKind::SessionTerminated, "No Bedrock session is active.");
-        return session->heartbeat();
+        auto response = session->heartbeat(options);
+        if (response && response->authed && response->invisibleFolderToken)
+            invisibleFolder_->setToken(*response->invisibleFolderToken);
+        return response;
+    }
+
+    InvisibleFolder &Client::invisibleFolder() noexcept
+    {
+        return *invisibleFolder_;
+    }
+
+    const InvisibleFolder &Client::invisibleFolder() const noexcept
+    {
+        return *invisibleFolder_;
     }
 
     void Client::onHeartbeatFailure(HeartbeatFailureHook hook)
@@ -430,5 +462,7 @@ namespace syslocker::bedrock
             previous->stop();
             previous->wait();
         }
+        if (invisibleFolder_)
+            invisibleFolder_->clearToken();
     }
 }

@@ -33,6 +33,7 @@ there when you want a quick, known-good link.
 - A lost heartbeat response is retried once with the exact token and challenge so Bedrock can return its cached signed result.
 - HTTPS certificate validation is mandatory. Optional curl SPKI pinning adds a second transport-layer check.
 - License keys and passwords are not retained for heartbeats or persisted by the library.
+- Requested variables and Invisible Folder tokens are read only after the signed Bedrock response verifies.
 
 No client-side library can stop an attacker who fully controls the process from
 patching or replacing application code. Static linking, code signing, platform
@@ -92,6 +93,7 @@ Add every `.cpp` under `src/` to your project and keep the private headers from
 bedrock.cpp
 crypto.cpp
 curl_http.cpp
+invisible_folder.cpp
 response.cpp
 ```
 
@@ -193,6 +195,65 @@ response you are trying to verify.
 Set `Config::automaticHeartbeats = false` to call `Client::heartbeatNow()` from
 your own scheduler. Calling it too early will correctly trigger the server's
 terminal timing response.
+
+## Variables and Invisible Folder
+
+Request server-side variables and an Invisible Folder Advanced token during
+initialization. Missing variables are represented as `std::nullopt`, matching
+Bedrock's signed JSON value of `false`.
+
+```cpp
+syslocker::bedrock::InitializationOptions options;
+options.requestInvisibleFolderToken = true;
+options.variables = {"release_channel", "message_of_the_day"};
+
+auto auth = client.authenticateWithKey("CUSTOMER-LICENSE-KEY", options);
+if (!auth || !auth->sessionStarted)
+    return 1;
+
+const auto channel = auth->response.variables.at("release_channel");
+if (channel)
+    std::cout << *channel << '\n';
+```
+
+When a running session needs a new Advanced token, request it with a manually
+scheduled heartbeat. The token stays in memory and is cleared at shutdown.
+
+```cpp
+auto heartbeat = client.heartbeatNow({.requestInvisibleFolderToken = true});
+if (!heartbeat)
+    return 1;
+```
+
+`Config::invisibleFolderApiKey` and the Bedrock token have deliberately
+different jobs:
+
+| File permission | Metadata credential | Bedrock helper download |
+| --- | --- | --- |
+| System Locker Advanced | Short-lived `invisible_folder_token` / `X-Invisiblefolder-Token` | Yes, uses the in-memory Bedrock token |
+| API Available | Invisible Folder API key | Metadata only |
+| Password Protected | Invisible Folder API key with `downloads.password_protected` | Metadata only |
+| System Locker Simple | Invisible Folder API key with `downloads.system_locker_simple` | Metadata only |
+
+Advanced metadata intentionally rejects an API key, even one with an Advanced
+download scope. Conversely, API-key metadata cannot use the Bedrock token.
+The library sends both configured credentials to the metadata endpoint; the
+server selects the valid one from the file's effective permission.
+
+For updates, `downloadIfNew` first reads `__revisions`. Passing a known
+revision skips an unchanged file; omit a destination to receive newer bytes in
+memory, or provide a destination selected by the application to save them.
+
+```cpp
+auto update = client.invisibleFolder().downloadIfNew(
+    "release-reference",
+    "17",
+    std::filesystem::path{"C:/ProgramData/Example/release.bin"});
+if (!update)
+    return 1;
+if (update->downloaded)
+    std::cout << "Saved revision " << update->revision << '\n';
+```
 
 ## Repository layout
 

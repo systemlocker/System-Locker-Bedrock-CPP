@@ -16,6 +16,8 @@ namespace syslocker::bedrock::test
         {
             std::string url;
             FormFields fields;
+            HttpHeaders headers;
+            std::string method = "POST";
         };
 
         using Handler = std::function<HttpResponse(const Request &)>;
@@ -25,6 +27,16 @@ namespace syslocker::bedrock::test
         HttpResponse post(std::string_view url, const FormFields &fields) override
         {
             Request request{std::string(url), fields};
+            {
+                std::lock_guard lock(mutex_);
+                requests_.push_back(request);
+            }
+            return handler_(request);
+        }
+
+        HttpResponse get(std::string_view url, const HttpHeaders &headers) override
+        {
+            Request request{std::string(url), {}, headers, "GET"};
             {
                 std::lock_guard lock(mutex_);
                 requests_.push_back(request);
@@ -43,6 +55,16 @@ namespace syslocker::bedrock::test
             for (const auto &[fieldName, value] : request.fields)
             {
                 if (fieldName == name)
+                    return value;
+            }
+            return {};
+        }
+
+        static std::string header(const Request &request, std::string_view name)
+        {
+            for (const auto &[headerName, value] : request.headers)
+            {
+                if (headerName == name)
                     return value;
             }
             return {};

@@ -3,6 +3,8 @@
 #include "export.hpp"
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -62,5 +64,10 @@ namespace syslocker::bedrock
         std::optional<std::string> licenseKeyHash;
         std::optional<std::string> usernameHash;
         std::optional<std::string> terminationMessage;
+        std::optional<std::string> invisibleFolderToken;
+
+        // A missing server-side variable is represented by std::nullopt. This
+        // is the C++ equivalent of Bedrock's JSON false default.
+        std::map<std::string, std::optional<std::string>, std::less<>> variables;
     };
 }

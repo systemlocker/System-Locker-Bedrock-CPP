@@ -120,6 +120,23 @@ namespace syslocker::bedrock::detail
                 response.licenseKeyHash = optionalString("license_key_hash");
                 response.usernameHash = optionalString("username_hash");
                 response.terminationMessage = optionalString("termination_message");
+                response.invisibleFolderToken = optionalString("invisible_folder_token");
+
+                if (json.contains("variables"))
+                {
+                    const auto &variables = json.at("variables");
+                    if (!variables.is_object())
+                        throw std::runtime_error("Bedrock field 'variables' has the wrong type.");
+                    for (auto it = variables.begin(); it != variables.end(); ++it)
+                    {
+                        if (it.value().is_boolean() && !it.value().get<bool>())
+                            response.variables.emplace(it.key(), std::nullopt);
+                        else if (it.value().is_string())
+                            response.variables.emplace(it.key(), it.value().get<std::string>());
+                        else
+                            throw std::runtime_error("Bedrock variable has the wrong type.");
+                    }
+                }
 
                 if (response.protocolVersion != kProtocol)
                     return Result<Response>::fail(ErrorKind::InvalidPayload, "Unsupported Bedrock protocol version.");

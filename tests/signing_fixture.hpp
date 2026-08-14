@@ -11,6 +11,8 @@
 #include <chrono>
 #include <ctime>
 #include <memory>
+#include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -53,7 +55,9 @@ namespace syslocker::bedrock::test
                                     std::string identityField = {},
                                     std::string identityHash = {},
                                     std::string termination = {},
-                                    std::int64_t serverTimeOffset = 0) const
+                                    std::int64_t serverTimeOffset = 0,
+                                    std::optional<std::string> invisibleFolderToken = std::nullopt,
+                                    std::map<std::string, std::optional<std::string>, std::less<>> variables = {}) const
         {
             nlohmann::json json{
                 {"protocol_version", "bedrock-v1"},
@@ -73,6 +77,14 @@ namespace syslocker::bedrock::test
                 json[identityField] = identityHash;
             if (!termination.empty())
                 json["termination_message"] = termination;
+            if (invisibleFolderToken)
+                json["invisible_folder_token"] = *invisibleFolderToken;
+            if (!variables.empty())
+            {
+                json["variables"] = nlohmann::json::object();
+                for (const auto &[name, value] : variables)
+                    json["variables"][name] = value ? nlohmann::json(*value) : nlohmann::json(false);
+            }
 
             const std::string payload = json.dump();
             std::array<unsigned char, 64> signature{};

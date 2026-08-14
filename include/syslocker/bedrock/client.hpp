@@ -2,6 +2,7 @@
 
 #include "config.hpp"
 #include "http.hpp"
+#include "invisible_folder.hpp"
 #include "response.hpp"
 #include "result.hpp"
 
@@ -10,6 +11,8 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 namespace syslocker::bedrock
 {
@@ -17,6 +20,17 @@ namespace syslocker::bedrock
     {
         Response response;
         bool sessionStarted = false;
+    };
+
+    struct InitializationOptions
+    {
+        bool requestInvisibleFolderToken = false;
+        std::vector<std::string> variables;
+    };
+
+    struct HeartbeatOptions
+    {
+        bool requestInvisibleFolderToken = false;
     };
 
     struct HeartbeatFailure
@@ -40,11 +54,15 @@ namespace syslocker::bedrock
         Client(const Client &) = delete;
         Client &operator=(const Client &) = delete;
 
-        Result<AuthenticationResult> authenticateWithKey(std::string licenseKey);
+        Result<AuthenticationResult> authenticateWithKey(std::string licenseKey,
+                                                         InitializationOptions options = {});
         Result<AuthenticationResult> authenticateWithPassword(std::string username,
-                                                               std::string password);
+                                                               std::string password,
+                                                               InitializationOptions options = {});
 
-        Result<Response> heartbeatNow();
+        Result<Response> heartbeatNow(HeartbeatOptions options = {});
+        InvisibleFolder &invisibleFolder() noexcept;
+        const InvisibleFolder &invisibleFolder() const noexcept;
         void onHeartbeatFailure(HeartbeatFailureHook hook);
         bool isAuthenticated() const noexcept;
         std::uint64_t heartbeatCount() const noexcept;
@@ -55,13 +73,15 @@ namespace syslocker::bedrock
     private:
         Result<AuthenticationResult> authenticate(FormFields fields,
                                                   std::string_view identity,
-                                                  bool keyAuthentication);
+                                                  bool keyAuthentication,
+                                                  const InitializationOptions &options);
         Result<void *> validateConfig() const;
 
         Config config_;
         std::unique_ptr<IHttpClient> http_;
         mutable std::mutex mutex_;
         std::shared_ptr<BedrockSession> session_;
+        std::unique_ptr<InvisibleFolder> invisibleFolder_;
         HeartbeatFailureHook failureHook_;
     };
 }
