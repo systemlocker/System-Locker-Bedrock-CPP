@@ -56,6 +56,7 @@ namespace syslocker::bedrock
         bool isFailure = false;
         bool authed = false;
         std::string protocolVersion;
+        std::optional<std::string> keyId;
         std::string system;
         std::string challenge;
         std::int64_t serverTime = 0;

@@ -61,6 +61,7 @@ namespace syslocker::bedrock::test
         {
             nlohmann::json json{
                 {"protocol_version", "bedrock-v1"},
+                {"kid", "test-signing-key"},
                 {"system", system},
                 {"response_code", responseCode},
                 {"human_response", responseCode == "OK" ? "Authentication successful." : "Request rejected."},
@@ -109,6 +110,7 @@ namespace syslocker::bedrock::test
             response.status = 200;
             response.body = detail::base64UrlEncode(reinterpret_cast<const unsigned char *>(combined.data()), combined.size());
             response.headers["x-bedrock-protocol"] = "bedrock-v1";
+            response.headers["x-bedrock-key-id"] = "test-signing-key";
             return response;
         }
 

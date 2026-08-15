@@ -116,6 +116,7 @@ namespace syslocker::bedrock::detail
                     return json.at(name).get<std::string>();
                 };
 
+                response.keyId = optionalString("kid");
                 response.sessionToken = optionalString("session_token");
                 response.licenseKeyHash = optionalString("license_key_hash");
                 response.usernameHash = optionalString("username_hash");
@@ -285,9 +286,14 @@ namespace syslocker::bedrock::detail
         if (EVP_DigestVerify(context.get(), signature, kSignatureBytes, message, messageLength) != 1)
             return Result<Response>::fail(ErrorKind::InvalidSignature, "Bedrock response signature verification failed.");
 
-        return parsePayload(config,
-                            std::string(reinterpret_cast<const char *>(message), messageLength),
-                            expectedChallenge);
+        auto parsed = parsePayload(config,
+                                   std::string(reinterpret_cast<const char *>(message), messageLength),
+                                   expectedChallenge);
+        if (!parsed)
+            return parsed;
+        if (!parsed->keyId || httpResponse.header("x-bedrock-key-id") != *parsed->keyId)
+            return Result<Response>::fail(ErrorKind::InvalidPayload, "Bedrock response signing key ID is missing or inconsistent.");
+        return parsed;
     }
 
     Result<Response> parseUnsignedRevocation(const Config &config,
