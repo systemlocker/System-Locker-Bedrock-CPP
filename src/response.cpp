@@ -10,13 +10,14 @@ namespace syslocker::bedrock
     namespace
     {
         using Entry = std::pair<std::string_view, ResponseCode>;
-        constexpr std::array<Entry, 28> kCodes{{
+        constexpr std::array<Entry, 29> kCodes{{
             {"OK", ResponseCode::Ok},
             {"OUTDATED", ResponseCode::Outdated},
             {"MISSING_FIELD", ResponseCode::MissingField},
             {"INVALID_REQUEST", ResponseCode::InvalidRequest},
             {"INVALID_SYSTEM", ResponseCode::InvalidSystem},
             {"INVALID_CREDENTIALS", ResponseCode::InvalidCredentials},
+            {"GOOGLE_SSO_REQUIRED", ResponseCode::GoogleSsoRequired},
             {"USER_NOT_VERIFIED", ResponseCode::UserNotVerified},
             {"INVALID_KEY", ResponseCode::InvalidKey},
             {"KEY_FROZEN", ResponseCode::KeyFrozen},

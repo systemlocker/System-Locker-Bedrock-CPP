@@ -84,6 +84,43 @@ SLB_TEST("authentication: signed user rejection remains inspectable and starts n
     SLB_REQUIRE(!client.isAuthenticated());
 }
 
+SLB_TEST("google sso: signed GOOGLE_SSO_REQUIRED denial surfaces the portal url")
+{
+    SigningFixture signer;
+    auto config = configFor(signer);
+    const std::string portal = googleSsoUrl(config.systemId);
+    auto fake = std::make_unique<FakeHttp>([&](const FakeHttp::Request &request)
+                                           {
+                                               return signer.signedResponse(config.systemId,
+                                                                            FakeHttp::field(request, "challenge"),
+                                                                            "GOOGLE_SSO_REQUIRED",
+                                                                            false,
+                                                                            {},
+                                                                            {},
+                                                                            {},
+                                                                            {},
+                                                                            0,
+                                                                            std::nullopt,
+                                                                            {},
+                                                                            portal);
+                                           });
+    Client client(config, std::move(fake));
+    const auto auth = client.authenticateWithPassword("alice", "not-the-sso-password");
+    SLB_REQUIRE(auth);
+    SLB_REQUIRE(!auth->sessionStarted);
+    SLB_REQUIRE_EQ(auth->response.code, ResponseCode::GoogleSsoRequired);
+    SLB_REQUIRE_EQ(auth->response.ssoUrl.value_or(""), portal);
+    SLB_REQUIRE_EQ(client.googleSsoUrl(), portal);
+}
+
+SLB_TEST("google sso: portal url encodes the system id like rawurlencode")
+{
+    SLB_REQUIRE_EQ(googleSsoUrl("sys tem+1"), std::string("https://systemlocker.net/user/sso?system=sys%20tem%2B1"));
+    SLB_REQUIRE_EQ(responseCodeFromString("GOOGLE_SSO_REQUIRED"), ResponseCode::GoogleSsoRequired);
+    SLB_REQUIRE(toString(ResponseCode::GoogleSsoRequired) == "GOOGLE_SSO_REQUIRED");
+    SLB_REQUIRE(!openUrl("")); // a malformed URL must fail closed, not crash
+}
+
 SLB_TEST("authentication: rejects a tampered signed body before JSON is trusted")
 {
     SigningFixture signer;

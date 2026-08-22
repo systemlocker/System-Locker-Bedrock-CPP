@@ -19,6 +19,7 @@ namespace syslocker::bedrock
         InvalidRequest,
         InvalidSystem,
         InvalidCredentials,
+        GoogleSsoRequired,
         UserNotVerified,
         InvalidKey,
         KeyFrozen,
@@ -65,6 +66,7 @@ namespace syslocker::bedrock
         std::optional<std::string> licenseKeyHash;
         std::optional<std::string> usernameHash;
         std::optional<std::string> terminationMessage;
+        std::optional<std::string> ssoUrl;
         std::optional<std::string> invisibleFolderToken;
 
         // A missing server-side variable is represented by std::nullopt. This

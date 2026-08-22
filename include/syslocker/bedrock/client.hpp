@@ -5,6 +5,7 @@
 #include "invisible_folder.hpp"
 #include "response.hpp"
 #include "result.hpp"
+#include "sso.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -63,6 +64,12 @@ namespace syslocker::bedrock
         Result<Response> heartbeatNow(HeartbeatOptions options = {});
         InvisibleFolder &invisibleFolder() noexcept;
         const InvisibleFolder &invisibleFolder() const noexcept;
+
+        /// Returns the Google SSO portal URL for the configured system.
+        std::string googleSsoUrl() const;
+        /// Opens the Google SSO portal for the configured system; see
+        /// sso.hpp for the SsoLaunch contract.
+        SsoLaunch beginGoogleSso() const;
         void onHeartbeatFailure(HeartbeatFailureHook hook);
         bool isAuthenticated() const noexcept;
         std::uint64_t heartbeatCount() const noexcept;

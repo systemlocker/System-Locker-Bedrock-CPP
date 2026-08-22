@@ -255,6 +255,31 @@ if (update->downloaded)
     std::cout << "Saved revision " << update->revision << '\n';
 ```
 
+## Google SSO (account authentication)
+
+Accounts created through Google sign-in have no local password on the
+server. A `username`/`password` authentication for such an account is
+answered with a signed `GOOGLE_SSO_REQUIRED` denial whose payload carries
+`sso_url` — the portal where the user completes Google sign-in and receives
+a system-specific password (valid 180 days) to use as their account
+password. There is no callback; the user transcribes the generated password
+into your login form and you simply retry.
+
+```cpp
+const auto auth = client.authenticateWithPassword(username, password);
+if (auth && auth->response.code == ResponseCode::GoogleSsoRequired)
+{
+    // The denial's URL is authoritative; open it in the default browser.
+    std::string portal = auth->response.ssoUrl.value_or(client.googleSsoUrl());
+    if (!openUrl(portal))
+        std::cout << "Finish Google sign-in at: " << portal << std::endl; // headless fallback
+}
+```
+
+You can also start the flow before any denial: `client.beginGoogleSso()`
+(or `beginGoogleSso(systemId)`) opens the portal and returns an
+`SsoLaunch{ url, opened }`.
+
 ## Repository layout
 
 ```text

@@ -121,6 +121,7 @@ namespace syslocker::bedrock::detail
                 response.licenseKeyHash = optionalString("license_key_hash");
                 response.usernameHash = optionalString("username_hash");
                 response.terminationMessage = optionalString("termination_message");
+                response.ssoUrl = optionalString("sso_url");
                 response.invisibleFolderToken = optionalString("invisible_folder_token");
 
                 if (json.contains("variables"))

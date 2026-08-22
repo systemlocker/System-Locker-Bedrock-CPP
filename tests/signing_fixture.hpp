@@ -57,7 +57,8 @@ namespace syslocker::bedrock::test
                                     std::string termination = {},
                                     std::int64_t serverTimeOffset = 0,
                                     std::optional<std::string> invisibleFolderToken = std::nullopt,
-                                    std::map<std::string, std::optional<std::string>, std::less<>> variables = {}) const
+                                    std::map<std::string, std::optional<std::string>, std::less<>> variables = {},
+                                    std::optional<std::string> ssoUrl = std::nullopt) const
         {
             nlohmann::json json{
                 {"protocol_version", "bedrock-v1"},
@@ -80,6 +81,8 @@ namespace syslocker::bedrock::test
                 json["termination_message"] = termination;
             if (invisibleFolderToken)
                 json["invisible_folder_token"] = *invisibleFolderToken;
+            if (ssoUrl)
+                json["sso_url"] = *ssoUrl;
             if (!variables.empty())
             {
                 json["variables"] = nlohmann::json::object();
