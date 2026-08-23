@@ -23,6 +23,55 @@ implementation directly into your own binary keeps your existing build flags
 and lets you step through the source in your own build; the prebuilt package is
 there when you want a quick, known-good link.
 
+### Fault-tolerant HWID (SL-HWID)
+
+SL-HWID is available in 1.0.0 as an opt-in device identifier. It is fault
+tolerant, cross platform (Windows, macOS, Linux), and combines **14 hardware
+factors**: any two can fail or change without changing the HWID, and drifted
+factors are quietly re-absorbed after each successful authentication. The
+point is to prevent over-fitting to any single machine detail while avoiding
+over-dependence on the exact hardware configuration.
+
+#### Upgrading an existing application
+
+**If you enables SL-HWID, reset every existing HWID for the system
+after deploying 1.0.0 and before affected users authenticate.** SL-HWID
+intentionally produces a different opaque identifier from the pre-1.0
+identifier, so existing device claims would otherwise be rejected as an HWID
+mismatch. Use the dashboard's reset-all-HWIDs action (or your existing
+administrative reset-every-HWID workflow), then let each user authenticate to
+claim their new identifier.
+
+This reset is required only when you opt into SL-HWID. Keep existing claims
+when continuing to send a custom identifier or the legacy identifier.
+
+For this C++ library, `Config::hwid` defaults to `"1"`, which leaves device
+locking disabled. To opt in, set `Config::hwid` to an empty string and retain
+the default `Config::hwidMode = "sl-hwid"`. Set `Config::hwidMode = "legacy"`
+to use the pre-1.0 derivation instead. Any non-empty custom `Config::hwid`
+still takes precedence over the mode.
+
+Default storage is shared by all Bedrock applications for the current user,
+so they report the same HWID on the same device. A short-lived interprocess
+lock serializes enrollment and refresh; a crashed process's marker is
+recovered automatically. Configure a different `Config::slHwidStore` only
+when you deliberately need separate device state. Re-enrolling changes the
+HWID for every application sharing that storage.
+
+The HWID determination is deliberately best-effort, but it is expected to
+match runs of the same application, and, in most cases, across any
+application run on the same device and operating system.
+
+Storage lives in the Windows registry (`HKLM\SOFTWARE\SystemLocker`, with
+an HKCU fallback) and a per-user directory elsewhere. One factor — the
+module's own persisted value — is hard-locked: changing or deleting it
+always requires re-activation, since that is tampering rather than drift.
+Name additional hard-locked factors with `Config::slHwidExtraMandatory` (for example
+`machine_guid`).
+
+A hard lock chosen when the shared device state is enrolled cannot be
+weakened by another application.
+
 ## Security properties
 
 - Ed25519 verification happens over the exact response bytes before JSON is parsed.
@@ -228,12 +277,12 @@ if (!heartbeat)
 `Config::invisibleFolderApiKey` and the Bedrock token have deliberately
 different jobs:
 
-| File permission | Metadata credential | Bedrock helper download |
-| --- | --- | --- |
+| File permission        | Metadata credential                                              | Bedrock helper download               |
+| ---------------------- | ---------------------------------------------------------------- | ------------------------------------- |
 | System Locker Advanced | Short-lived `invisible_folder_token` / `X-Invisiblefolder-Token` | Yes, uses the in-memory Bedrock token |
-| API Available | Invisible Folder API key | Metadata only |
-| Password Protected | Invisible Folder API key with `downloads.password_protected` | Metadata only |
-| System Locker Simple | Invisible Folder API key with `downloads.system_locker_simple` | Metadata only |
+| API Available          | Invisible Folder API key                                         | Metadata only                         |
+| Password Protected     | Invisible Folder API key with `downloads.password_protected`     | Metadata only                         |
+| System Locker Simple   | Invisible Folder API key with `downloads.system_locker_simple`   | Metadata only                         |
 
 Advanced metadata intentionally rejects an API key, even one with an Advanced
 download scope. Conversely, API-key metadata cannot use the Bedrock token.
@@ -285,7 +334,6 @@ You can also start the flow before any denial: `client.beginGoogleSso()`
 ```text
 include/       stable public API
 src/           implementation
-tests/         offline protocol and tamper tests (reference)
 examples/      environment-variable based CLI (reference)
 third_party/   vendored JSON parser and notice
 static/        prebuilt Windows x64 static SDK and release archive

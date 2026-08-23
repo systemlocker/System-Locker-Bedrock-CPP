@@ -5,11 +5,13 @@
 #include "invisible_folder.hpp"
 #include "response.hpp"
 #include "result.hpp"
+#include "slhwid.hpp"
 #include "sso.hpp"
 
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -83,6 +85,7 @@ namespace syslocker::bedrock
                                                   bool keyAuthentication,
                                                   const InitializationOptions &options);
         Result<void *> validateConfig() const;
+        Result<std::shared_ptr<slhwid::Session>> prepareSecretSharing(const std::string &identity);
 
         Config config_;
         std::unique_ptr<IHttpClient> http_;
@@ -90,5 +93,6 @@ namespace syslocker::bedrock
         std::shared_ptr<BedrockSession> session_;
         std::unique_ptr<InvisibleFolder> invisibleFolder_;
         HeartbeatFailureHook failureHook_;
+        std::map<std::string, std::shared_ptr<slhwid::Session>> ssSessions_;
     };
 }

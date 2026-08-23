@@ -23,3 +23,12 @@ Credentials are used for initialization and are not stored by `Client`.
 Temporary request buffers are overwritten on a best-effort basis after use.
 The operating system, allocator, HTTP library, debugger, crash reporter, or a
 fully compromised process may still retain or observe copies.
+
+## SL-HWID module
+
+The default threshold HWID module makes copied state and casual spoofing
+harder by requiring a stored enrollment plus enough current factors. Our
+objective is to reduce HWID churn from minor hardware changes, without
+reducing the strength of HWID as a locking mechanism. The key itself is never
+persisted. The module wipes key material deterministically after use,
+matching the rest of this client.

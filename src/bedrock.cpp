@@ -283,6 +283,10 @@ namespace syslocker::bedrock
 
     Result<void *> Client::validateConfig() const
     {
+        if (config_.hwidMode != "legacy" && config_.hwidMode != "sl-hwid")
+            return Result<void *>::fail(ErrorKind::Configuration, "HWID mode must be \"legacy\" or \"sl-hwid\".");
+        // An explicit hwid (including "1", device checks disabled) always
+        // wins; the SL-HWID module only runs for an empty hwid.
         if (config_.systemId.size() != 20 ||
             !std::all_of(config_.systemId.begin(), config_.systemId.end(), [](unsigned char character)
                          {
@@ -302,6 +306,29 @@ namespace syslocker::bedrock
         if (!decodedKey || decodedKey->size() != 32)
             return Result<void *>::fail(ErrorKind::Configuration, "The Bedrock public key must decode to exactly 32 bytes.");
         return static_cast<void *>(nullptr);
+    }
+
+    Result<std::shared_ptr<slhwid::Session>> Client::prepareSecretSharing(const std::string &identity)
+    {
+        {
+            std::lock_guard lock(mutex_);
+            const auto cached = ssSessions_.find(identity);
+            if (cached != ssSessions_.end())
+                return cached->second;
+        }
+        slhwid::Options options;
+        if (config_.slHwidStore)
+            options.storePath = *config_.slHwidStore;
+        options.extraMandatory = config_.slHwidExtraMandatory;
+        auto prepared = slhwid::prepare(options);
+        if (!prepared)
+            return Result<std::shared_ptr<slhwid::Session>>::fail(prepared.error().kind, prepared.error().message);
+        auto session = std::make_shared<slhwid::Session>(std::move(*prepared));
+        {
+            std::lock_guard lock(mutex_);
+            ssSessions_[identity] = session;
+        }
+        return session;
     }
 
     Result<AuthenticationResult> Client::authenticateWithKey(std::string licenseKey,
@@ -337,6 +364,19 @@ namespace syslocker::bedrock
         }
 
         shutdown();
+        std::string hwidValue = config_.hwid;
+        std::shared_ptr<slhwid::Session> ssSession;
+        if (hwidValue.empty()) // SL-HWID mode: recover or enroll at auth time
+        {
+            auto prepared = prepareSecretSharing(std::string(identity));
+            if (!prepared)
+            {
+                wipe(fields);
+                return Result<AuthenticationResult>::fail(prepared.error().kind, prepared.error().message);
+            }
+            ssSession = *prepared;
+            hwidValue = ssSession->hwid();
+        }
         auto challenge = detail::generateChallenge();
         if (!challenge)
         {
@@ -345,7 +385,7 @@ namespace syslocker::bedrock
         }
 
         fields.emplace_back("system", config_.systemId);
-        fields.emplace_back("hwid", config_.hwid);
+        fields.emplace_back("hwid", hwidValue);
         fields.emplace_back("version", config_.version);
         fields.emplace_back("beatrate", std::to_string(config_.beatRate.count()));
         fields.emplace_back("challenge", *challenge);
@@ -391,6 +431,12 @@ namespace syslocker::bedrock
         const auto &responseHash = keyAuthentication ? response->licenseKeyHash : response->usernameHash;
         if (!responseHash || *responseHash != *identityHash)
             return Result<AuthenticationResult>::fail(ErrorKind::InvalidPayload, "Bedrock response identity hash does not match the authentication request.");
+
+        // The server accepted this identity on this device: re-center the
+        // secret-sharing shares on the hardware observed this launch.
+        // Failures are non-fatal — the next launch re-derives.
+        if (ssSession)
+            ssSession->commit();
 
         auto session = std::make_shared<BedrockSession>(*http_, config_, *response->sessionToken, failureHook_);
         if (config_.automaticHeartbeats)
