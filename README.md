@@ -25,16 +25,20 @@ there when you want a quick, known-good link.
 
 ### Fault-tolerant HWID (SL-HWID)
 
-SL-HWID is available in 1.0.0 as an opt-in device identifier. It is fault
-tolerant, cross platform (Windows, macOS, Linux), and combines **14 hardware
-factors**: any two can fail or change without changing the HWID, and drifted
-factors are quietly re-absorbed after each successful authentication. The
-point is to prevent over-fitting to any single machine detail while avoiding
-over-dependence on the exact hardware configuration.
+SL-HWID is the default device identifier since 1.0.0 — a change from
+pre-1.0 versions. It is fault tolerant, cross platform (Windows, macOS,
+Linux), and combines **14 hardware factors** by default: any two can fail
+or change without changing the HWID, and drifted factors are quietly
+re-absorbed after each successful authentication. The point is to prevent
+over-fitting to any single machine detail while avoiding over-dependence
+on the exact hardware configuration.
+
+Existing pre-v2 HWIDs remain recoverable with their stored schema and
+threshold; they migrate to the current schema after a successful commit..
 
 #### Upgrading an existing application
 
-**If you enables SL-HWID, reset every existing HWID for the system
+**If this update enables SL-HWID, reset every existing HWID for the system
 after deploying 1.0.0 and before affected users authenticate.** SL-HWID
 intentionally produces a different opaque identifier from the pre-1.0
 identifier, so existing device claims would otherwise be rejected as an HWID
@@ -62,10 +66,6 @@ The HWID determination is deliberately best-effort, but it is expected to
 match runs of the same application, and, in most cases, across any
 application run on the same device and operating system.
 
-Storage lives in the Windows registry (`HKLM\SOFTWARE\SystemLocker`, with
-an HKCU fallback) and a per-user directory elsewhere. One factor — the
-module's own persisted value — is hard-locked: changing or deleting it
-always requires re-activation, since that is tampering rather than drift.
 Name additional hard-locked factors with `Config::slHwidExtraMandatory` (for example
 `machine_guid`).
 

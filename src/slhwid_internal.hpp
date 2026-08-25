@@ -34,13 +34,24 @@ namespace syslocker::bedrock::slhwid::detail
     std::string hwidOf(const Key &k);
     bool ctEqual(const std::vector<unsigned char> &a, const std::vector<unsigned char> &b);
 
-    // Threshold: 80% above ten factors, else 70%; at least five enrolled
-    // factors; never below mandatory+1. Returns 0 on refusal.
+    // A conservative physical-machine floor is nine current-schema slots;
+    // requiring one fewer tolerates one additional unavailable collector.
+    // Re-evaluate this constant whenever factors or groups change.
+    constexpr int kMinimumFactors = 8;
+
+    // Percentage policy: 80% below eight factors, else 70%; the current
+    // minimum means new/current helpers begin on the 70% branch. Never below
+    // mandatory+1. Returns 0 when the minimum factor count is not met.
     int threshold(int n, int m);
 
     std::string normalize(const std::string &name, const std::string &raw);
     bool isMissing(const std::string &value);
     std::map<std::string, std::string> normalizeFactors(const std::map<std::string, std::string> &raw);
+    constexpr std::uint8_t kLegacyNormVersion = 1;
+    constexpr std::uint8_t kCurrentNormVersion = 2;
+    std::map<std::string, std::string> projectFactors(const std::map<std::string, std::string> &raw,
+                                                      std::uint8_t normVersion);
+    std::set<std::string> mapMandatoryToCurrent(const std::set<std::string> &names);
 
     struct SlotData
     {
@@ -78,6 +89,7 @@ namespace syslocker::bedrock::slhwid::detail
     };
     struct Helper
     {
+        std::uint8_t normVersion = 0;
         std::uint8_t salt = 0;
         int threshold = 0;
         std::vector<HelperSlot> slots; // stored sorted by name
@@ -87,7 +99,8 @@ namespace syslocker::bedrock::slhwid::detail
     std::vector<unsigned char> serializeHelper(const std::map<std::string, Share> &shares,
                                                const std::set<std::string> &mandatory,
                                                int t, std::uint8_t salt,
-                                               const std::vector<unsigned char> &cw);
+                                               const std::vector<unsigned char> &cw,
+                                               std::uint8_t normVersion = kCurrentNormVersion);
     // Throws SecretSharingCorruptError-typed std::runtime_error on bad input.
     Helper parseHelper(const std::vector<unsigned char> &blob);
     bool isCorruptError(const std::exception &error);

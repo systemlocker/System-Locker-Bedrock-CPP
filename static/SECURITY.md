@@ -32,3 +32,6 @@ objective is to reduce HWID churn from minor hardware changes, without
 reducing the strength of HWID as a locking mechanism. The key itself is never
 persisted. The module wipes key material deterministically after use,
 matching the rest of this client.
+
+Applications using the same store share one enrollment and HWID. Protect that
+store and choose a separate explicit store when isolation is required.
