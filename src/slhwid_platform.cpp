@@ -1,6 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS
-// Platform layer: default storage (Windows registry with an HKCU
-// fallback; owner-only files elsewhere) and factor collectors. Every source
+// Platform layer: a coherently selected Windows registry hive and
+// fault-tolerant factor collectors. Every source
 // degrades gracefully — a missing source just leaves the slot absent, which
 // the threshold scheme absorbs.
 
@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <regex>
 #include <sstream>
@@ -21,12 +22,18 @@
 #include <thread>
 
 #if defined(_WIN32)
+#include <winsock2.h>
 #include <windows.h>
+#include <bcrypt.h>
+#include <iphlpapi.h>
+#include <winioctl.h>
 #else
 #include <cerrno>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #if defined(__linux__)
@@ -36,6 +43,70 @@
 
 namespace syslocker::bedrock::slhwid::detail
 {
+    RegistryRootSelection selectRegistryRoot(bool machineHelper, bool machineSlstore,
+                                             bool userHelper, bool userSlstore)
+    {
+        if (machineHelper && machineSlstore) return RegistryRootSelection::machine;
+        if (userHelper && userSlstore) return RegistryRootSelection::user;
+        if (machineHelper) return RegistryRootSelection::machine;
+        if (userHelper) return RegistryRootSelection::user;
+        if (machineSlstore) return RegistryRootSelection::machine;
+        if (userSlstore) return RegistryRootSelection::user;
+        return RegistryRootSelection::none;
+    }
+
+    std::optional<std::string> parseRawSmbiosUuid(const std::vector<unsigned char> &raw)
+    {
+        if (raw.size() < 8) return std::nullopt;
+        const std::uint32_t tableLength = static_cast<std::uint32_t>(raw[4]) |
+            (static_cast<std::uint32_t>(raw[5]) << 8) | (static_cast<std::uint32_t>(raw[6]) << 16) |
+            (static_cast<std::uint32_t>(raw[7]) << 24);
+        if (tableLength > raw.size() - 8) return std::nullopt;
+        const std::size_t end = 8 + tableLength;
+        for (std::size_t offset = 8; offset + 4 <= end;)
+        {
+            const unsigned char type = raw[offset];
+            const std::size_t length = raw[offset + 1];
+            if (length < 4 || offset + length > end) return std::nullopt;
+            if (type == 1 && length >= 24)
+            {
+                const unsigned char *uuid = raw.data() + offset + 8;
+                if (std::all_of(uuid, uuid + 16, [](unsigned char b) { return b == 0; }) ||
+                    std::all_of(uuid, uuid + 16, [](unsigned char b) { return b == 0xff; })) return std::nullopt;
+                const bool little = raw[1] > 2 || (raw[1] == 2 && raw[2] >= 6);
+                const int a0 = little ? 3 : 0, a1 = little ? 2 : 1, a2 = little ? 1 : 2, a3 = little ? 0 : 3;
+                const int b0 = little ? 5 : 4, b1 = little ? 4 : 5, c0 = little ? 7 : 6, c1 = little ? 6 : 7;
+                char out[37]{};
+                std::snprintf(out, sizeof(out), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                    uuid[a0], uuid[a1], uuid[a2], uuid[a3], uuid[b0], uuid[b1], uuid[c0], uuid[c1], uuid[8], uuid[9], uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15]);
+                return std::string(out);
+            }
+            std::size_t next = offset + length;
+            while (next + 1 < end && (raw[next] != 0 || raw[next + 1] != 0)) ++next;
+            if (next + 1 >= end) return std::nullopt;
+            offset = next + 2;
+            if (type == 127) break;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<std::string> parseStorageDescriptorSerial(const std::vector<unsigned char> &descriptor, std::size_t returned)
+    {
+        if (returned < 36 || returned > descriptor.size()) return std::nullopt;
+        const std::uint32_t offset = static_cast<std::uint32_t>(descriptor[24]) |
+            (static_cast<std::uint32_t>(descriptor[25]) << 8) | (static_cast<std::uint32_t>(descriptor[26]) << 16) |
+            (static_cast<std::uint32_t>(descriptor[27]) << 24);
+        if (offset == 0 || offset >= returned) return std::nullopt;
+        const char *begin = reinterpret_cast<const char *>(descriptor.data() + offset);
+        const char *end = begin, *limit = reinterpret_cast<const char *>(descriptor.data() + returned);
+        while (end < limit && *end != '\0') ++end;
+        std::string serial(begin, end);
+        const auto first = serial.find_first_not_of(" \t\r\n");
+        const auto last = serial.find_last_not_of(" \t\r\n");
+        if (first == std::string::npos) return std::nullopt;
+        return serial.substr(first, last - first + 1);
+    }
+
     namespace
     {
         std::string trim(const std::string &value)
@@ -105,16 +176,52 @@ namespace syslocker::bedrock::slhwid::detail
         }
 
 #if defined(_WIN32)
-        std::string popenCapture(const std::string &command)
+        std::string popenCapture(const std::string &command, unsigned long timeoutMs = 4000)
         {
             std::string output;
-            FILE *pipe = ::_popen(command.c_str(), "r");
-            if (pipe == nullptr)
+            constexpr std::size_t limit = 1024 * 1024;
+            SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+            HANDLE readPipe = nullptr, writePipe = nullptr;
+            if (!CreatePipe(&readPipe, &writePipe, &security, 0) || !SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0))
+            {
+                if (readPipe) CloseHandle(readPipe);
+                if (writePipe) CloseHandle(writePipe);
                 return "";
-            char buffer[4096];
-            while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
-                output += buffer;
-            ::_pclose(pipe);
+            }
+            STARTUPINFOA startup{}; startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES;
+            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE); startup.hStdOutput = writePipe; startup.hStdError = writePipe;
+            PROCESS_INFORMATION process{};
+            std::string line = "cmd.exe /d /s /c " + command;
+            std::vector<char> mutableLine(line.begin(), line.end()); mutableLine.push_back('\0');
+            const bool started = CreateProcessA(nullptr, mutableLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                                nullptr, nullptr, &startup, &process) != FALSE;
+            CloseHandle(writePipe);
+            if (!started) { CloseHandle(readPipe); return ""; }
+            HANDLE job = CreateJobObjectA(nullptr, nullptr);
+            if (job)
+            {
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
+                    !AssignProcessToJobObject(job, process.hProcess)) { CloseHandle(job); job = nullptr; }
+            }
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            for (;;)
+            {
+                DWORD available = 0;
+                while (PeekNamedPipe(readPipe, nullptr, 0, nullptr, &available, nullptr) && available)
+                {
+                    char buffer[4096]; DWORD count = 0;
+                    if (!ReadFile(readPipe, buffer, std::min<DWORD>(available, sizeof(buffer)), &count, nullptr) || !count) break;
+                    output.append(buffer, std::min<std::size_t>(count, output.size() < limit ? limit - output.size() : 0));
+                    available -= count;
+                }
+                if (WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) break;
+                if (std::chrono::steady_clock::now() >= deadline)
+                { if (job) TerminateJobObject(job, 1); else TerminateProcess(process.hProcess, 1); WaitForSingleObject(process.hProcess, 1000); break; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            CloseHandle(readPipe); CloseHandle(process.hThread); CloseHandle(process.hProcess); if (job) CloseHandle(job);
             return output;
         }
 
@@ -123,16 +230,28 @@ namespace syslocker::bedrock::slhwid::detail
             CreateDirectoryA(directory.c_str(), nullptr);
         }
 #else
-        std::string popenCapture(const std::string &command)
+        std::string popenCapture(const std::string &command, unsigned long timeoutMs = 4000)
         {
             std::string output;
-            FILE *pipe = ::popen(command.c_str(), "r");
-            if (pipe == nullptr)
-                return "";
-            char buffer[4096];
-            while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
-                output += buffer;
-            ::pclose(pipe);
+            int pipefd[2]{}; if (::pipe(pipefd) != 0) return "";
+            const pid_t child = ::fork();
+            if (child < 0) { ::close(pipefd[0]); ::close(pipefd[1]); return ""; }
+            if (child == 0) { ::setpgid(0, 0); ::close(pipefd[0]); ::dup2(pipefd[1], STDOUT_FILENO); ::dup2(pipefd[1], STDERR_FILENO); ::close(pipefd[1]); ::execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char *>(nullptr)); ::_exit(127); }
+            ::close(pipefd[1]); ::setpgid(child, child);
+            const int flags = ::fcntl(pipefd[0], F_GETFL, 0); if (flags >= 0) ::fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            bool exited = false, eof = false;
+            while (!eof && std::chrono::steady_clock::now() < deadline)
+            {
+                char buffer[4096]; const ssize_t count = ::read(pipefd[0], buffer, sizeof(buffer));
+                if (count > 0) output.append(buffer, std::min<std::size_t>(static_cast<std::size_t>(count), output.size() < 1024 * 1024 ? 1024 * 1024 - output.size() : 0));
+                else if (count == 0) eof = true;
+                int status = 0; exited = ::waitpid(child, &status, WNOHANG) == child;
+                if (exited && eof) break;
+                struct pollfd event{pipefd[0], POLLIN | POLLHUP, 0}; ::poll(&event, 1, 10);
+            }
+            if (!exited) { ::kill(-child, SIGKILL); ::kill(child, SIGKILL); int status = 0; while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {} }
+            ::close(pipefd[0]);
             return output;
         }
 
@@ -291,53 +410,88 @@ namespace syslocker::bedrock::slhwid::detail
         public:
             Read read(const std::string &key) override
             {
-                Read result;
-                for (const HKEY root : {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER})
-                {
-                    HKEY handle;
-                    if (RegOpenKeyExA(root, "SOFTWARE\\SystemLocker", 0,
-                                      KEY_READ | KEY_WOW64_64KEY, &handle) != ERROR_SUCCESS)
-                        continue;
-                    DWORD type = 0;
-                    DWORD size = 0;
-                    if (RegQueryValueExA(handle, key.c_str(), nullptr, &type, nullptr, &size) != ERROR_SUCCESS ||
-                        type != REG_BINARY)
-                    {
-                        RegCloseKey(handle);
-                        continue;
-                    }
-                    std::vector<unsigned char> data(size);
-                    if (RegQueryValueExA(handle, key.c_str(), nullptr, nullptr, data.data(), &size) == ERROR_SUCCESS)
-                    {
-                        data.resize(size);
-                        result.data = std::move(data);
-                        RegCloseKey(handle);
-                        return result;
-                    }
-                    RegCloseKey(handle);
-                }
-                return result; // absent everywhere
+                selectRoot();
+                return selectedRoot_ ? readFrom(*selectedRoot_, key) : Read{};
             }
 
             bool write(const std::string &key, const std::vector<unsigned char> &data, std::string &error) override
             {
+                if (selectedRoot_)
+                {
+                    if (writeTo(*selectedRoot_, key, data))
+                        return true;
+                    error = "slhwid: registry write failed";
+                    return false;
+                }
                 for (const HKEY root : {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER})
                 {
-                    HKEY handle;
-                    if (RegCreateKeyExA(root, "SOFTWARE\\SystemLocker", 0, nullptr, REG_OPTION_NON_VOLATILE,
-                                        KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr, &handle, nullptr) != ERROR_SUCCESS)
-                        continue;
-                    const LSTATUS status = RegSetValueExA(handle, key.c_str(), 0, REG_BINARY,
-                                                          data.data(), static_cast<DWORD>(data.size()));
-                    RegCloseKey(handle);
-                    if (status == ERROR_SUCCESS)
+                    if (writeTo(root, key, data))
+                    {
+                        selectedRoot_ = root;
                         return true;
+                    }
                 }
                 error = "slhwid: registry write failed";
                 return false;
             }
 
             std::string lockDirectory() const override { return localLockDirectory(); }
+
+        private:
+            std::optional<HKEY> selectedRoot_;
+
+            static Read readFrom(HKEY root, const std::string &key)
+            {
+                Read result;
+                HKEY handle;
+                if (RegOpenKeyExA(root, "SOFTWARE\\SystemLocker", 0,
+                                  KEY_READ | KEY_WOW64_64KEY, &handle) != ERROR_SUCCESS)
+                    return result;
+                DWORD type = 0;
+                DWORD size = 0;
+                if (RegQueryValueExA(handle, key.c_str(), nullptr, &type, nullptr, &size) != ERROR_SUCCESS ||
+                    type != REG_BINARY)
+                {
+                    RegCloseKey(handle);
+                    return result;
+                }
+                std::vector<unsigned char> data(size);
+                if (RegQueryValueExA(handle, key.c_str(), nullptr, nullptr, data.data(), &size) == ERROR_SUCCESS)
+                {
+                    data.resize(size);
+                    result.data = std::move(data);
+                }
+                RegCloseKey(handle);
+                return result;
+            }
+
+            static bool writeTo(HKEY root, const std::string &key, const std::vector<unsigned char> &data)
+            {
+                HKEY handle;
+                if (RegCreateKeyExA(root, "SOFTWARE\\SystemLocker", 0, nullptr, REG_OPTION_NON_VOLATILE,
+                                    KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr, &handle, nullptr) != ERROR_SUCCESS)
+                    return false;
+                const LSTATUS status = RegSetValueExA(handle, key.c_str(), 0, REG_BINARY,
+                                                      data.data(), static_cast<DWORD>(data.size()));
+                RegCloseKey(handle);
+                return status == ERROR_SUCCESS;
+            }
+
+            void selectRoot()
+            {
+                if (selectedRoot_)
+                    return;
+                const bool machineHelper = readFrom(HKEY_LOCAL_MACHINE, "HWID-device").data.has_value();
+                const bool machineSlstore = readFrom(HKEY_LOCAL_MACHINE, "slstore").data.has_value();
+                const bool userHelper = readFrom(HKEY_CURRENT_USER, "HWID-device").data.has_value();
+                const bool userSlstore = readFrom(HKEY_CURRENT_USER, "slstore").data.has_value();
+                switch (selectRegistryRoot(machineHelper, machineSlstore, userHelper, userSlstore))
+                {
+                case RegistryRootSelection::machine: selectedRoot_ = HKEY_LOCAL_MACHINE; break;
+                case RegistryRootSelection::user: selectedRoot_ = HKEY_CURRENT_USER; break;
+                case RegistryRootSelection::none: break;
+                }
+            }
         };
     }
 
@@ -632,6 +786,58 @@ namespace syslocker::bedrock::slhwid::detail
             return data;
         }
 
+        std::optional<std::string> systemUuid()
+        {
+            constexpr DWORD provider = 0x52534D42;
+            const UINT size = GetSystemFirmwareTable(provider, 0, nullptr, 0);
+            if (size < 8 || size > 1024 * 1024) return std::nullopt;
+            std::vector<unsigned char> raw(size);
+            return GetSystemFirmwareTable(provider, 0, raw.data(), size) == size ? parseRawSmbiosUuid(raw) : std::nullopt;
+        }
+
+        std::vector<std::string> physicalDiskSerials()
+        {
+            std::vector<std::string> serials; STORAGE_PROPERTY_QUERY query{};
+            query.PropertyId = StorageDeviceProperty; query.QueryType = PropertyStandardQuery;
+            for (int index = 0; index < 32; ++index)
+            {
+                const std::string path = "\\\\.\\PhysicalDrive" + std::to_string(index);
+                HANDLE disk = CreateFileA(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+                if (disk == INVALID_HANDLE_VALUE) continue;
+                STORAGE_DESCRIPTOR_HEADER header{}; DWORD returned = 0;
+                if (!DeviceIoControl(disk, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &header, sizeof(header), &returned, nullptr) || header.Size < sizeof(STORAGE_DEVICE_DESCRIPTOR) || header.Size > 1024 * 1024) { CloseHandle(disk); continue; }
+                std::vector<unsigned char> buffer(header.Size);
+                if (DeviceIoControl(disk, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), buffer.data(), static_cast<DWORD>(buffer.size()), &returned, nullptr))
+                    if (const auto serial = parseStorageDescriptorSerial(buffer, returned)) serials.push_back(*serial);
+                CloseHandle(disk);
+            }
+            return serials;
+        }
+
+        std::optional<std::string> volumeSerial()
+        {
+            const char *drive = std::getenv("SystemDrive"); std::string root = drive ? drive : "C:";
+            if (root.empty() || (root.back() != '\\' && root.back() != '/')) root += "\\";
+            DWORD serial = 0; if (!GetVolumeInformationA(root.c_str(), nullptr, 0, &serial, nullptr, nullptr, nullptr, 0)) return std::nullopt;
+            char formatted[10]{}; std::snprintf(formatted, sizeof(formatted), "%04lX-%04lX", static_cast<unsigned long>(serial >> 16), static_cast<unsigned long>(serial & 0xffff)); return std::string(formatted);
+        }
+
+        std::optional<std::string> physicalMac()
+        {
+            ULONG size = 15 * 1024; std::vector<unsigned char> buffer(size);
+            ULONG status = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data()), &size);
+            if (status == ERROR_BUFFER_OVERFLOW) { buffer.resize(size); status = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data()), &size); }
+            if (status != ERROR_SUCCESS) return std::nullopt;
+            for (auto *adapter = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data()); adapter; adapter = adapter->Next)
+            {
+                if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK || adapter->IfType == IF_TYPE_TUNNEL || adapter->PhysicalAddressLength != 6) continue;
+                static constexpr char hex[] = "0123456789ABCDEF"; std::string mac; mac.reserve(12);
+                for (ULONG i = 0; i < 6; ++i) { const unsigned char b = adapter->PhysicalAddress[i]; mac += hex[b >> 4]; mac += hex[b & 15]; }
+                return mac;
+            }
+            return std::nullopt;
+        }
+
         void put(std::map<std::string, std::string> &factors, const std::string &slot, const std::optional<std::string> &value)
         {
             if (value && !value->empty())
@@ -640,11 +846,9 @@ namespace syslocker::bedrock::slhwid::detail
 
         std::map<std::string, std::string> windowsSchemaV2Factors()
         {
-            // WMIC is optional on current Windows releases. A single
-            // best-effort CIM pass gathers the newer optional signals, while
-            // failures simply leave their recovery slots absent.
+            // One bounded UTF-8 CIM pass enriches native factor collection.
             const std::string script =
-                "$ErrorActionPreference='SilentlyContinue';"
+                "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;$ErrorActionPreference='SilentlyContinue';"
                 "function Emit($n,$v){$c=@($v|?{$_ -ne $null -and ([string]$_).Trim().Length -gt 0}|%{([string]$_).Trim()}|sort);if($c.Count -gt 0){Write-Output ($n+'='+($c -join '|'))}};"
                 "$p=Get-CimInstance Win32_ComputerSystemProduct;Emit 'system_uuid' $p.UUID;Emit 'system_serial' $p.IdentifyingNumber;"
                 "Emit 'chassis_serial' (Get-CimInstance Win32_SystemEnclosure).SerialNumber;"
@@ -653,7 +857,7 @@ namespace syslocker::bedrock::slhwid::detail
                 "Emit 'nic_identity' (Get-CimInstance Win32_NetworkAdapter|?{$_.PhysicalAdapter}).PermanentAddress;"
                 "Emit 'battery_serial' (Get-CimInstance -Namespace root/wmi -ClassName BatteryStaticData).SerialNumber;"
                 "$ek=Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256;if($ek.IsPresent){Emit 'tpm_ek' $ek.PublicKeyHash}";
-            const auto output = popenCapture("powershell.exe -NoProfile -NonInteractive -Command \"" + script + "\" 2>nul");
+            const auto output = popenCapture("powershell.exe -NoProfile -NonInteractive -Command \"" + script + "\" 2>nul", 6000);
             std::map<std::string, std::string> factors;
             std::istringstream lines(output);
             std::string line;
@@ -682,6 +886,7 @@ namespace syslocker::bedrock::slhwid::detail
             trimmed.erase(std::remove(trimmed.begin(), trimmed.end(), '}'), trimmed.end());
             put(factors, "product_uuid", trimmed);
         }
+        put(factors, "system_uuid", systemUuid());
         put(factors, "board_serial", registryValue(bios, "BaseBoardSerialNumber"));
         put(factors, "cpu_id", registryValue("HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", "Identifier"));
 
@@ -722,18 +927,7 @@ namespace syslocker::bedrock::slhwid::detail
         }
         put(factors, "monitor_edid", multiInstance(edidBlobs));
 
-        std::vector<std::string> diskSerials;
-        {
-            std::istringstream lines(popenCapture("wmic diskdrive get SerialNumber 2>nul"));
-            std::string line;
-            while (std::getline(lines, line))
-            {
-                line = trim(line);
-                if (!line.empty() && toLower(line) != "serialnumber")
-                    diskSerials.push_back(line);
-            }
-        }
-        put(factors, "disk_serial", multiInstance(diskSerials));
+        put(factors, "disk_serial", multiInstance(physicalDiskSerials()));
 
         {
             MEMORYSTATUSEX status{};
@@ -742,41 +936,15 @@ namespace syslocker::bedrock::slhwid::detail
                 factors["ram_total"] = std::to_string(status.ullTotalPhys);
         }
 
-        {
-            const char *drive = std::getenv("SystemDrive");
-            const auto output = popenCapture(std::string("cmd /c vol ") + (drive != nullptr ? drive : "C:"));
-            const auto matches = allMatches("([0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})", output);
-            if (!matches.empty())
-                factors["volume_id"] = matches.back();
-        }
+        put(factors, "volume_id", volumeSerial());
 
-        {
-            // getmac's CSV columns are locale-stable; the physical-address
-            // format is fixed.
-            const auto output = popenCapture("getmac /fo csv /nh");
-            const auto rows = allMatches(
-                "([0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2}-[0-9A-Fa-f]{2})([^\\r\\n]*)",
-                output);
-            for (const auto &row : rows)
-            {
-                const std::string rest = toLower(row.substr(17));
-                if (rest.find("teredo") != std::string::npos || rest.find("isatap") != std::string::npos ||
-                    rest.find("vethernet") != std::string::npos || rest.find("vmware") != std::string::npos ||
-                    rest.find("wsl") != std::string::npos || rest.find("docker") != std::string::npos ||
-                    rest.find("bluetooth") != std::string::npos || rest.find("tailscale") != std::string::npos ||
-                    rest.find("vpn") != std::string::npos)
-                    continue;
-                std::string mac = row.substr(0, 17);
-                mac.erase(std::remove(mac.begin(), mac.end(), '-'), mac.end());
-                factors["mac"] = mac;
-                break;
-            }
-        }
+        put(factors, "mac", physicalMac());
 
         // Keep legacy collection above intact: schema-v1 helpers need those
         // exact raw values when they are recovered before migration.
         for (const auto &[name, value] : windowsSchemaV2Factors())
-            put(factors, name, value);
+            if (factors.count(name) == 0)
+                put(factors, name, value);
 
         return factors;
     }

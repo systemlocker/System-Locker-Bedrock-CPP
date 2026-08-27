@@ -163,8 +163,13 @@ namespace syslocker::bedrock
             return Result<std::vector<std::uint8_t>>::fail(ErrorKind::SessionTerminated,
                                                             "No Invisible Folder token is available. Request one during initialization or a heartbeat.");
 
-        const HttpResponse response = http_.post(endpoint(config_.invisibleFolderBaseUrl, kDownloadPrefix) + std::string(referenceId),
-                                                  {{"invisiblefolder_token", token}});
+        // The download route is a plain GET; credentials travel in headers
+        // because GET request bodies are not supported.
+        HttpHeaders headers;
+        headers.emplace_back("X-Invisiblefolder-Download", "1");
+        headers.emplace_back("X-Invisiblefolder-Token", token);
+        const HttpResponse response = http_.get(endpoint(config_.invisibleFolderBaseUrl, kDownloadPrefix) + std::string(referenceId),
+                                                headers);
         std::fill(token.begin(), token.end(), '\0');
         if (!response.ok())
         {

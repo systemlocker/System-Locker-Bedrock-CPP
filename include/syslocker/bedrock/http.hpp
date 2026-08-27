@@ -36,8 +36,9 @@ namespace syslocker::bedrock
         virtual ~IHttpClient() = default;
         virtual HttpResponse post(std::string_view url, const FormFields &fields) = 0;
 
-        // Metadata requests require headers and use GET. The default keeps
-        // existing custom transports source-compatible until they opt in.
+        // Metadata requests and file downloads use GET with headers. The
+        // default keeps existing custom transports source-compatible until
+        // they opt in.
         virtual HttpResponse get(std::string_view, const HttpHeaders &)
         {
             HttpResponse response;
@@ -49,7 +50,7 @@ namespace syslocker::bedrock
     struct CurlHttpOptions
     {
         std::chrono::milliseconds timeout{15000};
-        std::string userAgent = "systemlocker-bedrock-cpp/0.2";
+        std::string userAgent = "systemlocker-bedrock-cpp/1.0.0";
         std::string pinnedPublicKey;
         std::string invisibleFolderPinnedPublicKey;
     };
