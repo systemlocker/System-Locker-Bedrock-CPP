@@ -11,7 +11,7 @@ namespace syslocker::bedrock
     {
         std::string systemId;
         std::string version = "bypass";
-        std::string hwid = "1";
+        std::string hwid = "";
 
         // How the device identifier is derived when hwid is empty. "sl-hwid"
         // runs the fault-tolerant module at authentication time; "legacy"

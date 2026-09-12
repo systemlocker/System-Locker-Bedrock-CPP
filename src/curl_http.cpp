@@ -12,6 +12,7 @@ namespace syslocker::bedrock
     namespace
     {
         std::once_flag curlInitialization;
+        constexpr std::size_t maximumResponseBytes = 1024 * 1024;
 
         void initializeCurl()
         {
@@ -30,10 +31,31 @@ namespace syslocker::bedrock
             return value;
         }
 
+        struct BodySink
+        {
+            std::string *body;
+            bool overflowed = false;
+        };
+
+        // Bound the body while libcurl is receiving it. Checking later in the
+        // signature/parser pipeline would still allow an attacker-controlled
+        // endpoint to force an unbounded allocation first.
         std::size_t writeBody(char *data, std::size_t size, std::size_t count, void *context)
         {
+            auto *sink = static_cast<BodySink *>(context);
+            if ((size != 0 && count > maximumResponseBytes / size) ||
+                sink->body->size() > maximumResponseBytes)
+            {
+                sink->overflowed = true;
+                return 0;
+            }
             const std::size_t bytes = size * count;
-            static_cast<std::string *>(context)->append(data, bytes);
+            if (bytes > maximumResponseBytes - sink->body->size())
+            {
+                sink->overflowed = true;
+                return 0;
+            }
+            sink->body->append(data, bytes);
             return bytes;
         }
 
@@ -121,8 +143,9 @@ namespace syslocker::bedrock
                 if (!options_.pinnedPublicKey.empty())
                     curl_easy_setopt(curl, CURLOPT_PINNEDPUBLICKEY, options_.pinnedPublicKey.c_str());
 
+                BodySink sink{&response.body};
                 curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeBody);
-                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sink);
                 curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, writeHeader);
                 curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response.headers);
 
@@ -137,7 +160,12 @@ namespace syslocker::bedrock
 
                 const CURLcode result = curl_easy_perform(curl);
                 if (result != CURLE_OK)
-                    response.error = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(result);
+                {
+                    response.error = sink.overflowed
+                                         ? "response body exceeds 1 MiB limit"
+                                         : (errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(result));
+                    response.body.clear();
+                }
                 else
                     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
 
@@ -182,8 +210,9 @@ namespace syslocker::bedrock
                 if (!options_.invisibleFolderPinnedPublicKey.empty())
                     curl_easy_setopt(curl, CURLOPT_PINNEDPUBLICKEY, options_.invisibleFolderPinnedPublicKey.c_str());
 
+                BodySink sink{&response.body};
                 curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeBody);
-                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sink);
                 curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, writeHeader);
                 curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response.headers);
 
@@ -201,7 +230,12 @@ namespace syslocker::bedrock
                 curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errorBuffer);
                 const CURLcode result = curl_easy_perform(curl);
                 if (result != CURLE_OK)
-                    response.error = errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(result);
+                {
+                    response.error = sink.overflowed
+                                         ? "response body exceeds 1 MiB limit"
+                                         : (errorBuffer[0] != '\0' ? errorBuffer : curl_easy_strerror(result));
+                    response.body.clear();
+                }
                 else
                     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.status);
 

@@ -163,6 +163,10 @@ namespace syslocker::bedrock::slhwid::detail
         const std::vector<unsigned char> &descriptor, std::size_t returned);
     bool acquireStorageLock(const std::string &directory, std::function<void()> &release, std::string &error);
     std::map<std::string, std::string> collectFactors(std::string &error);
+    std::optional<std::string> nativeTpmFactor();
+    void mergeWindowsFactors(std::map<std::string, std::string> &factors,
+                             const std::map<std::string, std::string> &fallback);
+    std::optional<std::string> hashTpmPublicBlob(const std::vector<unsigned char> &blob);
 
     struct SessionState
     {
@@ -182,5 +186,6 @@ namespace syslocker::bedrock::slhwid::detail
                                 const std::shared_ptr<Store> &store);
 
     void secureWipe(void *data, std::size_t length);
+    std::vector<unsigned char> sha256(const unsigned char *data, std::size_t length);
     std::string toLowerHex(const std::vector<unsigned char> &data);
 }

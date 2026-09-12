@@ -74,6 +74,11 @@ weakened by another application.
 
 ## Security properties
 
+> [!WARNING]
+> Watch this repository (Watch → Custom → Releases) and update your
+> dependency when a release ships: releases regularly add security
+> enhancements.
+
 - Ed25519 verification happens over the exact response bytes before JSON is parsed.
 - Signing keys are supplied locally by the developer; they are never learned from the authentication server.
 - A fresh 64-byte cryptographic challenge is generated for every request.

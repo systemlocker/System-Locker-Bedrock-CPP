@@ -50,7 +50,7 @@ namespace syslocker::bedrock
     struct CurlHttpOptions
     {
         std::chrono::milliseconds timeout{15000};
-        std::string userAgent = "systemlocker-bedrock-cpp/1.0.0";
+        std::string userAgent = "systemlocker-bedrock-cpp/1.2.0";
         std::string pinnedPublicKey;
         std::string invisibleFolderPinnedPublicKey;
     };

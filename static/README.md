@@ -7,7 +7,7 @@ of libcurl, OpenSSL Crypto, and zlib. It does not require Bedrock, curl,
 OpenSSL, or zlib DLLs at runtime.
 
 The current release archive is named
-`systemlocker-bedrock-sdk-1.0.0-win64-static.zip` and is also available as the
+`systemlocker-bedrock-sdk-1.2.0-win64-static.zip` and is also available as the
 `static/` directory in this repository.
 
 The package is just headers, libraries, and license texts — it ships no build
@@ -30,6 +30,7 @@ libcurl.lib
 libcrypto.lib
 zs.lib
 bcrypt.lib
+ncrypt.lib
 advapi32.lib
 crypt32.lib
 secur32.lib
