@@ -243,7 +243,7 @@ namespace syslocker::bedrock::slhwid::detail
             std::size_t begin = 0;
             std::size_t end = raw.size();
             const auto blank = [](unsigned char c)
-            { return c == 0 || std::isspace(c) != 0; };
+            { return c == 0 || c == ' ' || (c >= '\t' && c <= '\r'); };
             while (begin < end && blank(static_cast<unsigned char>(raw[begin])))
                 ++begin;
             while (end > begin && blank(static_cast<unsigned char>(raw[end - 1])))
@@ -261,14 +261,14 @@ namespace syslocker::bedrock::slhwid::detail
         }
         const std::set<std::string> &identifierFactors()
         {
-            static const std::set<std::string> names = {"machine_guid", "product_uuid", "system_uuid", "board_serial", "system_serial", "chassis_serial", "disk_serial", "volume_id", "tpm_ek", "memory_modules", "nic_identity", "battery_serial", "monitor_edid"};
+            static const std::set<std::string> names = {"machine_guid", "product_uuid", "system_uuid", "board_serial", "system_serial", "chassis_serial", "disk_serial", "fixed_disk_serial", "volume_id", "tpm_ek", "memory_modules", "nic_identity", "battery_serial", "monitor_edid"};
             return names;
         }
         bool asciiHex(unsigned char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
         bool degenerateIdentifier(const std::string &value)
         {
             std::string compact;
-            for (const unsigned char c : value) if (std::isalnum(c) != 0) compact.push_back(static_cast<char>(c));
+            for (const unsigned char c : value) if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) compact.push_back(static_cast<char>(c));
             return compact.size() >= 4 && (std::all_of(compact.begin(), compact.end(), [](char c) { return c == '0'; }) || std::all_of(compact.begin(), compact.end(), [](char c) { return c == 'f'; }));
         }
         bool uuidLike(const std::string &value)
@@ -312,6 +312,41 @@ namespace syslocker::bedrock::slhwid::detail
         return placeholders().count(trimNulAndSpace(value)) > 0;
     }
 
+    namespace
+    {
+        // Schema v3 replaces the full EDID inventory with one SHA-256 digest
+        // per monitor. Windows keeps the EDID of every monitor ever attached,
+        // and the hex inventory regularly exceeds the 4096-byte factor limit;
+        // the digests stay small. They are derived before that limit drops
+        // monitor_edid.
+        std::string edidDigests(const std::string &normalized)
+        {
+            if (normalized.size() > 1024 * 1024)
+                return ""; // bound the hashing work on untrusted input
+            std::vector<std::string> digests;
+            std::size_t begin = 0;
+            for (;;)
+            {
+                const auto end = normalized.find('|', begin);
+                const auto part = normalized.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+                if (placeholders().count(part) == 0 && !degenerateIdentifier(part))
+                    digests.push_back(toLowerHex(sha256(reinterpret_cast<const unsigned char *>(part.data()), part.size())));
+                if (end == std::string::npos)
+                    break;
+                begin = end + 1;
+            }
+            std::sort(digests.begin(), digests.end());
+            std::string joined;
+            for (const auto &digest : digests)
+            {
+                if (!joined.empty())
+                    joined += '|';
+                joined += digest;
+            }
+            return joined;
+        }
+    }
+
     std::map<std::string, std::string> normalizeFactors(const std::map<std::string, std::string> &raw)
     {
         std::map<std::string, std::string> out;
@@ -341,6 +376,14 @@ namespace syslocker::bedrock::slhwid::detail
             if (saneFactor(name, normalized))
                 out[name] = normalized;
         }
+        // Derived, never collected: a supplied value is always replaced.
+        out.erase("edid_digests");
+        if (const auto edids = raw.find("monitor_edid"); edids != raw.end())
+        {
+            const auto digests = edidDigests(normalize("monitor_edid", edids->second));
+            if (!digests.empty() && saneFactor("edid_digests", digests))
+                out["edid_digests"] = digests;
+        }
         return out;
     }
 
@@ -354,10 +397,21 @@ namespace syslocker::bedrock::slhwid::detail
             return names;
         }
 
-        const std::vector<std::string> &currentDirectFactorNames()
+        // Schema v2 is historical compatibility code: v2 helpers recover with it.
+        const std::vector<std::string> &v2DirectFactorNames()
         {
             static const std::vector<std::string> names = {
                 "slstore", "machine_guid", "cpu_id", "disk_serial", "ram_total", "volume_id", "firmware",
+                "tpm_ek", "memory_modules", "nic_identity", "battery_serial"};
+            return names;
+        }
+
+        // Schema v3: fixed_disk_serial leaves out removable, USB and
+        // image-backed disks, and display_group uses per-monitor EDID digests.
+        const std::vector<std::string> &currentDirectFactorNames()
+        {
+            static const std::vector<std::string> names = {
+                "slstore", "machine_guid", "cpu_id", "fixed_disk_serial", "ram_total", "volume_id", "firmware",
                 "tpm_ek", "memory_modules", "nic_identity", "battery_serial"};
             return names;
         }
@@ -368,13 +422,32 @@ namespace syslocker::bedrock::slhwid::detail
             std::vector<std::string> members;
         };
 
-        const std::vector<FactorGroup> &currentFactorGroups()
+        const std::vector<FactorGroup> &v2FactorGroups()
         {
             static const std::vector<FactorGroup> groups = {
                 {"platform_identity", {"system_uuid", "board_serial", "system_serial", "chassis_serial"}},
                 {"display_group", {"gpu_id", "monitor_edid"}},
                 {"software_environment", {"computer_name", "os_build"}}};
             return groups;
+        }
+
+        const std::vector<FactorGroup> &currentFactorGroups()
+        {
+            static const std::vector<FactorGroup> groups = {
+                {"platform_identity", {"system_uuid", "board_serial", "system_serial", "chassis_serial"}},
+                {"display_group", {"gpu_id", "edid_digests"}},
+                {"software_environment", {"computer_name", "os_build"}}};
+            return groups;
+        }
+
+        // Direct names and groups of a grouped schema (v2 or v3).
+        std::pair<const std::vector<std::string> *, const std::vector<FactorGroup> *> schema(std::uint8_t normVersion)
+        {
+            if (normVersion == kV2NormVersion)
+                return {&v2DirectFactorNames(), &v2FactorGroups()};
+            if (normVersion == kCurrentNormVersion)
+                return {&currentDirectFactorNames(), &currentFactorGroups()};
+            throw std::runtime_error("slhwid: unsupported factor schema " + std::to_string(normVersion));
         }
 
         std::string groupValue(const FactorGroup &group, const std::map<std::string, std::string> &raw)
@@ -406,12 +479,14 @@ namespace syslocker::bedrock::slhwid::detail
             if (name == "product_uuid" || name == "board_serial" || name == "system_uuid" ||
                 name == "system_serial" || name == "chassis_serial")
                 return "platform_identity";
-            if (name == "gpu_id" || name == "monitor_edid")
+            if (name == "gpu_id" || name == "monitor_edid" || name == "edid_digests")
                 return "display_group";
             if (name == "computer_name" || name == "os_build")
                 return "software_environment";
             if (name == "mac")
                 return "nic_identity";
+            if (name == "disk_serial")
+                return "fixed_disk_serial";
             return name;
         }
     }
@@ -433,15 +508,14 @@ namespace syslocker::bedrock::slhwid::detail
             }
             return out;
         }
-        if (normVersion != kCurrentNormVersion)
-            throw std::runtime_error("slhwid: unsupported factor schema " + std::to_string(normVersion));
-        for (const auto &name : currentDirectFactorNames())
+        const auto [directNames, groups] = schema(normVersion);
+        for (const auto &name : *directNames)
         {
             const auto found = raw.find(name);
             if (found != raw.end() && !found->second.empty())
                 out[name] = found->second;
         }
-        for (const auto &group : currentFactorGroups())
+        for (const auto &group : *groups)
         {
             const auto value = groupValue(group, raw);
             if (!value.empty())
@@ -608,7 +682,7 @@ namespace syslocker::bedrock::slhwid::detail
         helper.checkWord.assign(blob.data() + 12 + payloadLen, blob.data() + 12 + payloadLen + 32);
         if (body[0] != 1)
             corrupt("unsupported version");
-        if (body[1] != kLegacyNormVersion && body[1] != kCurrentNormVersion)
+        if (body[1] != kLegacyNormVersion && body[1] != kV2NormVersion && body[1] != kCurrentNormVersion)
             corrupt("unsupported factor schema");
         if (body[6] != 0 || body[7] != 0)
             corrupt("reserved header bits set");
@@ -617,8 +691,9 @@ namespace syslocker::bedrock::slhwid::detail
             allowedNames.insert(legacyFactorNames().begin(), legacyFactorNames().end());
         else
         {
-            allowedNames.insert(currentDirectFactorNames().begin(), currentDirectFactorNames().end());
-            for (const auto &group : currentFactorGroups())
+            const auto [directNames, groups] = schema(body[1]);
+            allowedNames.insert(directNames->begin(), directNames->end());
+            for (const auto &group : *groups)
                 allowedNames.insert(group.name);
         }
         const int n = body[3];
@@ -988,9 +1063,10 @@ namespace syslocker::bedrock::slhwid::detail
         for (const auto &name : options.extraMandatory)
         {
             bool valid = name.size() >= 1 && name.size() <= 32 &&
-                         (std::isalpha(static_cast<unsigned char>(name[0])) != 0) &&
+                         // Same rule as the C# implementation: ^[a-z][a-z0-9_]{0,31}$.
+                         name[0] >= 'a' && name[0] <= 'z' &&
                          std::all_of(name.begin(), name.end(), [](unsigned char c)
-                                     { return std::isalnum(c) != 0 || c == '_'; });
+                                     { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
             if (!valid)
                 return Result<Session>::fail(ErrorKind::LocalFailure,
                                               "slhwid: invalid extra mandatory slot name '" + name + "'");
@@ -1059,13 +1135,22 @@ namespace syslocker::bedrock::slhwid::detail
                     return Result<Session>::fail(ErrorKind::LocalFailure,
                                                  "slhwid: store secret read failed: " + stored.error);
                 std::vector<unsigned char> value;
+                std::optional<std::vector<unsigned char>> existingValue;
                 if (stored.data)
                 {
                     std::string error;
-                    auto existingValue = unwrapSlstore(*stored.data, error);
-                    if (!existingValue)
+                    existingValue = unwrapSlstore(*stored.data, error);
+                    // A malformed secret is never replaced implicitly. An
+                    // explicit forceReenroll discards it with the rest of the
+                    // device state; refusing that too would leave the device
+                    // no recovery path short of deleting the store by hand.
+                    if (!existingValue && !options.forceReenroll)
                         return Result<Session>::fail(ErrorKind::LocalFailure, error);
+                }
+                if (existingValue)
+                {
                     value = *existingValue;
+                    secureWipe(existingValue->data(), existingValue->size());
                 }
                 else
                 {

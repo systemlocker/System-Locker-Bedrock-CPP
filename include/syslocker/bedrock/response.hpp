@@ -42,6 +42,7 @@ namespace syslocker::bedrock
         SigningKeyRevoked,
         ConcurrentHeartbeat,
         InternalError,
+        NightflyerLeaseActive,
         Unknown,
     };
 

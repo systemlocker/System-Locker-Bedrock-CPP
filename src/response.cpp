@@ -10,7 +10,7 @@ namespace syslocker::bedrock
     namespace
     {
         using Entry = std::pair<std::string_view, ResponseCode>;
-        constexpr std::array<Entry, 29> kCodes{{
+        constexpr std::array<Entry, 30> kCodes{{
             {"OK", ResponseCode::Ok},
             {"OUTDATED", ResponseCode::Outdated},
             {"MISSING_FIELD", ResponseCode::MissingField},
@@ -39,6 +39,7 @@ namespace syslocker::bedrock
             {"HEARTBEAT_VARIANCE_EXCEEDED", ResponseCode::HeartbeatVarianceExceeded},
             {"SIGNING_KEY_REVOKED", ResponseCode::SigningKeyRevoked},
             {"CONCURRENT_HEARTBEAT", ResponseCode::ConcurrentHeartbeat},
+            {"NIGHTFLYER_LEASE_ACTIVE", ResponseCode::NightflyerLeaseActive},
             {"INTERNAL_ERROR", ResponseCode::InternalError},
         }};
     }
